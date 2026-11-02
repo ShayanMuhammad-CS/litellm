@@ -35,6 +35,7 @@ from collections.abc import (
 )
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from http.client import responses as http_status_phrases
 from itertools import chain
 from types import MappingProxyType, TracebackType, UnionType
 from typing import (
@@ -485,6 +486,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     open_sse_before_first_byte,
     proxy_exception_from_route_error,
     resolve_litellm_call_id,
+    serialize_http_exception_detail,
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
@@ -2312,7 +2314,7 @@ async def _websocket_http_exception_response(websocket: WebSocket, exc: Starlett
         case WebSocketState.CONNECTING:
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
         case WebSocketState.CONNECTED:
-            await websocket.close(code=_websocket_close_code(exc.status_code))
+            await websocket.close(code=_websocket_close_code(exc.status_code), reason=_websocket_close_reason(exc))
             return None
         case WebSocketState.RESPONSE | WebSocketState.DISCONNECTED:
             return None
@@ -2322,6 +2324,11 @@ async def _websocket_http_exception_response(websocket: WebSocket, exc: Starlett
 
 def _websocket_close_code(status_code: int) -> int:
     return status.WS_1011_INTERNAL_ERROR if status_code >= 500 else status.WS_1008_POLICY_VIOLATION
+
+
+def _websocket_close_reason(exc: StarletteHTTPException) -> str:
+    message: Final = serialize_http_exception_detail(exc.detail)[0]
+    return websocket_close_reason(message, fallback=http_status_phrases.get(exc.status_code, "WebSocket error"))
 
 
 def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Exception | None = None) -> None:

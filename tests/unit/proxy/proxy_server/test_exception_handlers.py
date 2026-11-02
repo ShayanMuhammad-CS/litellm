@@ -576,7 +576,42 @@ async def test_http_exception_on_an_accepted_websocket_closes_it_with_a_matching
     response: Final = await otlp_http_exception_handler(websocket, HTTPException(status_code, "late failure"))
 
     assert response is None
-    assert sent[-1] == {"type": "websocket.close", "code": close_code, "reason": ""}
+    assert sent[-1] == {"type": "websocket.close", "code": close_code, "reason": "late failure"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "detail", "reason"),
+    [
+        pytest.param(
+            429, "é" * 100, "é" * 61, id="long detail cut to the close frame without splitting a character"
+        ),
+        pytest.param(
+            400,
+            {"error": "Violated content safety policy", "guardrail_response": {"flagged": True}},
+            "Violated content safety policy",
+            id="structured detail closes with its error message",
+        ),
+        pytest.param(
+            400, {"error": {"message": "blocked by policy"}}, "blocked by policy", id="nested error message"
+        ),
+        pytest.param(429, "", "Too Many Requests", id="empty detail falls back to the status phrase"),
+        pytest.param(499, "", "WebSocket error", id="non-standard status falls back to a generic reason"),
+    ],
+)
+async def test_http_exception_on_an_accepted_websocket_closes_it_with_its_detail_as_the_reason(
+    status_code: int, detail: object, reason: str
+) -> None:
+    sent: Final[list[Message]] = []
+    websocket: Final = _websocket(sent)
+    await websocket.accept()
+
+    await otlp_http_exception_handler(websocket, HTTPException(status_code, detail))
+
+    assert sent == [
+        {"type": "websocket.accept", "subprotocol": None, "headers": []},
+        {"type": "websocket.close", "code": 1008, "reason": reason},
+    ]
 
 
 def test_websocket_auth_rejection_reaches_the_client_as_a_denial_instead_of_a_server_error() -> None:
